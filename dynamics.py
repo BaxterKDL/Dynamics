@@ -1,6 +1,8 @@
+from __future__ import print_function
 import numpy as np
-import random
-from ForwardKinematics.FkSolver import FKSolver
+from ForwardKinematics.FKSolver import FKSolver as fk
+from ForwardKinematics.robot import Baxter
+from numpy.linalg import inv
 
 class Dynamics:
 
@@ -27,8 +29,19 @@ class Dynamics:
         self.link_mass = np.array([5.70044, 3.22698, 4.31272, 2.07206, 2.24665, 1.60979, 0.54218])
 
         self.Q_j = np.matrix([[0, -1, 0, 0], [1, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0]])
+        # print ("Q_matrix \n \n", self.Q_j)
 
         self.J_i_mat = []
+        self.num_links = 7
+        self.M_mat = None
+        self.U_ij = None
+        self.U_ijk = None
+        self.joint_angles = None
+        self.joint_velocities = None
+        self.joint_acceleration = None
+
+        self.baxter_robot = Baxter()
+        self.fk_obj = fk(self.baxter_robot)
 
     def calc_inertia_mat(self):
         '''Calculating the individual inertia matrices in there own frames of reference'''
@@ -50,5 +63,99 @@ class Dynamics:
             self.J_i_mat.append(J_i)
         return self.J_i_mat
 
-    def calc_U_ij_mat(self):
+    def calc_trans_matrices(self, joint_angles):
+        '''Calculating the individual transformation matrices to needed for transformation of Inertia matrices'''
+        lenn = len(joint_angles.keys())
+        # print ("\n Length of joint angle list \n", lenn )
+        T_0_i = [ t for t in self.fk_obj.solveIntermediateFK(joint_angles)]
+
+        # print ("\n\nTotal Transformation matrix\n\n", T_0_i[0] )
+
+        return T_0_i
+
+    def calc_U_ij_mat(self, T_0_i_all):
         '''The matrix Ui j is the rate of change of points on link i relative to the base as the joint position q j changes'''
+
+        self.U_ij = np.matrix(np.ones([self.num_links, self.num_links]))
+
+        for i in xrange(0, self.num_links):
+            for j in xrange(0, self.num_links):
+
+                if j<=i:
+                    self.U_ij[i,j] = T_0_i_all[j-1] * self.Q_j * ( inv(T_0_i_all[j-1]) * T_0_i_all[j])
+                elif j>i:
+                    self.U_ij[i,j] = 0
+        return self.U_ij
+
+    def calc_U_ijk_mat(self, T_0_i_all):
+        '''The matrix U_ijk is some random bullshit -  Interaction effect between joints '''
+
+        for i in xrange(0, self.num_links):
+            for j in xrange(0, self.num_links):
+                for k in xrange(0, self.num_links):
+
+                    if (i>=k) and (k>=j):
+                        self.U_ijk = T_0_i_all[j-1]*self.Q_j*(inv(T_0_i_all[j-1])*T_0_i_all[k-1])*self.Q_j*(inv(T_0_i_all[k-1])*T_0_i_all[i])
+                    elif (i>=j) and (j>=k):
+                        self.U_ijk = T_0_i_all[k-1]*self.Q_j*(inv(T_0_i_all[k-1])*T_0_i_all[j-1])*self.Q_j*(inv(T_0_i_all[j-1])*T_0_i_all[i])
+
+                    elif i<j or i<k:
+                        self.U_ijk = 0
+
+
+
+    def calc_M_matrix(self):
+        '''Calculating all the individual M_i_k elements that form the M inertia matrix
+
+        i and k are the link number and joint number respectively
+        M = n x n
+        '''
+        self.M_mat = np.matrix(np.ones([self.num_links, self.num_links]))
+
+        for i in range(0,7):
+
+            for k in range(0,7):
+                j = max(i,k)
+                summ = 0
+                for index in range(j,self.num_links):
+                    summ += np.trace(self.U_ij[j,k] * self.J_i_mat[j] * np.transpose(self.U_ij[j,i]))
+                self.M_mat[i, k] = summ
+
+        return self.M_mat
+
+
+    def calc_C_matrix(self):
+        '''Calculating the complete Coriolis effect vector
+        C = n x 1
+        '''
+
+        self.C_mat = np.matrix(np.ones([self.num_links, 1]))
+
+        for i in range(0, self.num_links):
+            sum_temp_m = 0
+            for k in range(0, self.num_links):
+                for m in range(0,self.num_links):
+
+                    j = max(max(i,k), m)
+                    h_ikm = 0
+                    for index in range(0,j):
+                        h_ikm += np.trace(self.U_ijk[j,k,m] * self.J[j] * np.transpose(self.U_ij[j,i]))
+
+                sum_temp_m += h_ikm*self.joint_velocities[k]*self.joint_velocities[m]
+
+            self.C_mat[i] = sum_temp_m
+
+        return self.C_mat
+
+
+    def calc_G_matrix(self):
+        '''Calculating the gravity effect vector
+        G = n x 1
+        '''
+
+        for i in xrange(0, self.num_links):
+            j = i
+
+            for p
+
+
