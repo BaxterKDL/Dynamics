@@ -6,17 +6,17 @@ from numpy.linalg import inv
 
 class Dynamics:
 
-    def __init__(self,a):
+    def __init__(self,a, jv):
 
         '''Declaring variables for the  MCG matrices'''
 
-        self.pos_COM = np.array([[-0.05117, 0.07908, 0.00086],
-                                 [0.00269, -0.00529, 0.06845],
-                                 [-0.07176, 0.08149, 0.00132],
-                                 [0.00159, -0.01117, 0.02618],
-                                 [-0.01168, 0.13111, 0.0046],
-                                 [0.00697, 0.006, 0.06048],
-                                 [0.005137, 0.0009572, -0.06682]])
+        self.pos_COM = np.array([[-0.05117, 0.07908, 0.00086, 1],
+                                 [0.00269, -0.00529, 0.06845, 1],
+                                 [-0.07176, 0.08149, 0.00132, 1],
+                                 [0.00159, -0.01117, 0.02618, 1],
+                                 [-0.01168, 0.13111, 0.0046, 1],
+                                 [0.00697, 0.006, 0.06048, 1],
+                                 [0.005137, 0.0009572, -0.06682, 1]])
 
         self.Ixx = [0.0470910226, 0.027885975, 0.0266173355, 0.0131822787, 0.0166774282, 0.0070053791, 0.0008162135]
         self.Iyy = [0.035959884, 0.020787492, 0.012480083, 0.009268520, 0.003746311, 0.005527552, 0.0008735012]
@@ -37,7 +37,7 @@ class Dynamics:
         self.U_ij = None
         self.U_ijk = None
         self.joint_angles = None
-        self.joint_velocities = None
+        self.joint_velocities = jv
         self.joint_acceleration = None
 
         self.baxter_robot = Baxter()
@@ -49,6 +49,7 @@ class Dynamics:
 
             I = np.matrix([[self.Ixx[i], self.Ixy[i], self.Ixz[i]], [self.Ixy[i], self.Iyy[i], self.Iyz[i]], [self.Ixz[i], self.Iyz[i], self.Izz[i]]])
             self.inertia_mat.append(I)
+
         return self.inertia_mat
 
     def calc_J_i_matrices(self):
@@ -67,24 +68,25 @@ class Dynamics:
         '''Calculating the individual transformation matrices to needed for transformation of Inertia matrices'''
         lenn = len(joint_angles.keys())
         # print ("\n Length of joint angle list \n", lenn )
-        T_0_i = [ t for t in self.fk_obj.solveIntermediateFK(joint_angles)]
+        T_0_i = list(self.fk_obj.solveIntermediateFK(joint_angles))
 
-        # print ("\n\nTotal Transformation matrix\n\n", T_0_i[0] )
+        # print ("\n\nTotal Transformation matrix\n\n", T_0_i )
 
         return T_0_i
 
     def calc_U_ij_mat(self, T_0_i_all):
         '''The matrix Ui j is the rate of change of points on link i relative to the base as the joint position q j changes'''
 
-        self.U_ij = np.matrix(np.ones([self.num_links, self.num_links]))
+        self.U_ij = x = [[None for _ in range(7)] for _ in range(7)]
+        # print ("Declared Uij", self.U_ij)
 
         for i in xrange(0, self.num_links):
             for j in xrange(0, self.num_links):
 
                 if j<=i:
-                    self.U_ij[i,j] = T_0_i_all[j-1] * self.Q_j * ( inv(T_0_i_all[j-1]) * T_0_i_all[j])
+                    self.U_ij[i][j] = T_0_i_all[j-1] * self.Q_j * ( inv(T_0_i_all[j-1]) * T_0_i_all[i])
                 elif j>i:
-                    self.U_ij[i,j] = 0
+                    self.U_ij[i][j] = 0
         return self.U_ij
 
     def calc_U_ijk_mat(self, T_0_i_all):
@@ -113,16 +115,14 @@ class Dynamics:
         self.M_mat = np.matrix(np.ones([self.num_links, self.num_links]))
 
         for i in range(0,7):
-
             for k in range(0,7):
                 j = max(i,k)
                 summ = 0
                 for index in range(j,self.num_links):
-                    summ += np.trace(self.U_ij[j,k] * self.J_i_mat[j] * np.transpose(self.U_ij[j,i]))
-                self.M_mat[i, k] = summ
+                    summ += np.trace(self.U_ij[j][k] * self.J_i_mat[j] * np.transpose(self.U_ij[j][i]))
+                self.M_mat[i,k] = summ
 
         return self.M_mat
-
 
     def calc_C_matrix(self):
         '''Calculating the complete Coriolis effect vector
@@ -139,8 +139,7 @@ class Dynamics:
                     j = max(max(i,k), m)
                     h_ikm = 0
                     for index in range(0,j):
-                        h_ikm += np.trace(self.U_ijk[j,k,m] * self.J[j] * np.transpose(self.U_ij[j,i]))
-
+                        h_ikm += np.trace(self.U_ijk[j][k][m] * self.J[j] * np.transpose(self.U_ij[j][i]))
                 sum_temp_m += h_ikm*self.joint_velocities[k]*self.joint_velocities[m]
 
             self.C_mat[i] = sum_temp_m
@@ -150,12 +149,16 @@ class Dynamics:
 
     def calc_G_matrix(self):
         '''Calculating the gravity effect vector
-        G = n x 1
-        '''
+        G = n x 1'''
 
-        for i in xrange(0, self.num_links):
-            j = i
+        self.G_mat = []
 
-            for p
+        g = np.array([0, 0, -9.81, 0])
+        for i in range(0, self.num_links):
+            temp = 0
+            for j in range(i, self.num_links):
+                temp += -self.link_mass[j]*( np.dot( g*self.U_ij[j][i], np.transpose(self.pos_COM[j])))
 
+            self.G_mat.append(float(temp))
 
+        return self.G_mat
